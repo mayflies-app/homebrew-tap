@@ -1,0 +1,8 @@
+{
+  "apps": [
+    {"name": "BigBang", "path": "../big-bang", "designDestination": "Sources/BigBang/MacAppDesign.swift", "localizationDestination": "Sources/BigBangCore/LocalizationResources.swift"},
+    {"name": "SimpleCodexBar", "path": "../simple-codex-bar", "designDestination": "Sources/SimpleCodexBar/MacAppDesign.swift", "localizationDestination": "Sources/CodexUsageCore/LocalizationResources.swift"},
+    {"name": "QuickNote", "path": "../quick-note", "designDestination": "Sources/QuickNote/MacAppDesign.swift", "localizationDestination": "Sources/QuickNoteCore/LocalizationResources.swift"},
+    {"name": "DockAutoHide", "path": "../DockAutoHide", "localizationDestination": "DockAutoHide/LocalizationResources.swift"}
+  ]
+}
