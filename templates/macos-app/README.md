@@ -1,0 +1,114 @@
+# macOS App Template
+
+The shared `scripts/app.py` and `scripts/lib` are copied into each app repository.
+`ci.yml` and `release.yml` are copied into `.github/workflows`. Apps using the shared
+SwiftUI design declare a `designDestination` for `shared/MacAppDesign.swift`.
+There is no runtime dependency on this checkout.
+
+Runtime translations live in English and Simplified Chinese `.lproj/*.strings`
+resources. `shared/LocalizationResources.swift` is copied to each app's
+`localizationDestination` in the catalog. It selects the app's explicit language,
+matches SwiftPM localization directories without case sensitivity, and falls back
+to English for missing keys. SwiftPM apps prefer the resource bundle embedded in
+the app before the module bundle; native Xcode apps use their main bundle.
+App-owned language preferences and live UI refresh stay in the product code.
+Keep translation values and formatted messages in resource tables, with matching
+keys and format arguments in both languages; preserve user and service content.
+
+## Command-Line Workflow
+
+| Command | Default behavior |
+| --- | --- |
+| `./scripts/app.py build` | Debug, native architecture, automatic local signing; `dist/dev/<Product>.app` |
+| `./scripts/app.py run` | Build successfully, quit the app at that exact output, then launch the new bundle |
+| `./scripts/app.py test` | Run product unit tests and declared offline regression scripts |
+| `./scripts/app.py package` | Release, Universal, ad hoc signing; app, DMG, manifest, and checksum under `dist/release/universal` |
+| `./scripts/app.py release --dry-run` | Inspect the release plan without building or external requests |
+
+Common options are `--version`, `--build`, `--arch`, `--configuration`, `--output`,
+and `--sign`. `run --` passes app arguments. Use `package --arch universal --sign developer-id`
+for a locally signed Universal app and DMG. Packaging does not submit notarization or publish.
+
+`release` defaults to a dry run. `--execute` is restricted to manual CI; `--publish`
+also publishes the release and updates the cask. Workflow defaults are `dry_run: true`
+and `publish: false`.
+
+## Configuration
+
+Use a PascalCase product and app filename and an `app.mayfiles.<Product>` bundle ID.
+Set `repository` to the exact `owner/repository` path from the checkout's Git origin,
+preserving its spelling and case. Repository names are independent of product names:
+BigBang uses `mayflies-app/big-bang`, while DockAutoHide uses `mayflies-app/DockAutoHide`.
+`VERSION` is the version source. Interfaces support English (`en`) and Simplified
+Chinese (`zh-Hans`); documents are English.
+
+Start with `starter/macos-app.json` and `starter/AGENTS.md`, set the actual identity
+and resources, and register the checkout in `catalog/apps.json`.
+
+```sh
+python3 -B scripts/sync_apps.py --app ExampleApp --check
+python3 -B scripts/sync_apps.py --app ExampleApp --apply
+```
+
+SwiftPM apps declare a source `Info.plist`, raw `resources`, required `resourceBundles`,
+and `dependencyLicenses`. Native Xcode projects compile existing app sources and
+consume local package libraries; the CLI may remain SwiftPM.
+
+Xcode apps declare `buildSystem: "xcode"`, `paths.project`, and `xcode.scheme`.
+Xcode builds the complete bundle and compiled plist; `packaging.infoPlist`
+identifies the source plist for validation. Signing uses `paths.entitlements`. Do not
+copy Xcode-owned resources again through CLI packaging.
+
+## Product Checks
+
+Product checks remain under `tools` or `Tests/Tools`. Run launches normal app behavior;
+isolated fixtures use explicit documented arguments and separate user data.
+
+Declare offline regression scripts in the top-level `testScripts` list using
+repository-relative `.sh` or `.py` paths. The common `test` command first runs
+SwiftPM tests when applicable, then these scripts in order, stopping on failure.
+Shell scripts run with Bash; Python scripts run with Python 3 and bytecode writes
+disabled. `TEST_ARCH` supplies the selected execution architecture. Xcode products
+declare their regression scripts in the same list. Default tests must use isolated
+data and services without opening product UI or changing production settings.
+
+All apps expose explicit prebuilt English/Chinese UI acceptance through the same command:
+
+```sh
+./scripts/app.py test --native --case localization \
+  --app /Applications/ExampleApp.app --output /private/tmp/exampleapp-localization
+```
+
+This explicit local check requires a visible, unlocked desktop. The app and output
+paths must be absolute; output must be new or empty with an existing writable parent.
+`nativeTests.localizationScript` declares the app's existing product test script.
+It receives `--app`, `--output`, `--case localization` and `--timeout-seconds`
+(default 90). It does not build or replace the selected app. Product runners reuse
+`VerificationEvidence.swift` for `manifest.json`, command logs, source/bundle
+fingerprints and report validation, and retain UI reports and screenshots.
+Each runner owns isolated data or restoration of any user settings and running state
+it touches. Ordinary `test` and CI do not open UI or change production settings.
+
+BigBang, QuickNote and SimpleCodexBar support fixture-only fault checks through
+`MACOS_LOCALIZATION_TEST_MODE=fail|hold`. They write `localization-progress.json`
+after the real English UI is visible. `fail` exits unsuccessfully at that point;
+`hold` waits for the requested deadline or Ctrl-C on the common command. Both
+remain failed runs after successful cleanup. The existing recorder reserves the
+isolated preference suite and temporary directory before launch and removes them
+after its child exits, even when no UI report was completed. QuickNote also removes
+its isolated SQLite database and sidecars while retaining screenshots and reports.
+
+## Documentation
+
+Every app has `README.md`, `CONTRIBUTING.md`, and `AGENTS.md`, plus
+`docs/development.md`, `docs/localization.md`, `docs/privacy.md`, and
+`docs/releasing.md`. Describe the implemented product, supported workflows, and
+required configuration. Keep validation artifacts in temporary output directories
+and commit history in Git.
+
+## CI and Distribution
+
+CI uses the GitHub-hosted `xcode-27` runner, Xcode 27, and SDK 27. The minimum runtime
+macOS version is an app setting. See [distribution preparation](../../docs/homebrew.md)
+for credentials, notarization, and cask publication. The configured repository must
+match the repository running the release workflow.

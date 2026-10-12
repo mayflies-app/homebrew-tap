@@ -1,21 +1,36 @@
-# homebrew-tap
+# Homebrew Tap
 
-This is my personal Homebrew tap for distributing software I develop.
+Homebrew distribution and shared macOS development tools for BigBang, SimpleCodexBar,
+QuickNote, and DockAutoHide. Each app owns its product code and native checks. Shared
+scripts, workflows, and design components are copied into the app repositories so
+they can build independently.
 
-The tap is used for apps that are not yet published in the official Homebrew repositories. When an app meets the requirements for the official Homebrew cask or formula repositories, I will migrate it there gradually and remove it from this tap.
-
-## Install
+## Installation
 
 ```sh
-brew tap nshcr/tap
+brew tap mayflies-app/tap
 brew install --cask dockautohide
 ```
 
-## Current Casks
+The available casks are listed in [`Casks/`](Casks). For apps without a published
+cask, follow the source-build instructions in the app's README.
 
-- `dockautohide` - [DockAutoHide](https://github.com/nshcr/DockAutoHide), a macOS app that auto-hides the Dock only when a window would cover it.
+## Development
 
-## Notes
+All four apps use `./scripts/app.py build|run|test|package` and
+`./scripts/app.py release --dry-run`. Each also has a native Xcode project named
+after the product; Codex Run uses `./scripts/app.py run`.
 
-- Casks in this tap are maintained alongside their upstream application releases.
-- Release assets and metadata are expected to stay aligned with the published version in the corresponding app repository.
+```sh
+bash scripts/check.sh
+bash scripts/check.sh --apps
+python3 -B scripts/sync_apps.py --app QuickNote --check
+python3 -B scripts/sync_apps.py --app QuickNote --apply
+```
+
+Synchronization compares files by default. `--apply` copies only shared paths and
+preserves product tools. Edit shared code in [`templates/macos-app`](templates/macos-app)
+and synchronize consumers; edit product behavior in the app repository.
+
+See the [template guide](templates/macos-app/README.md) for commands and configuration,
+and the [distribution guide](docs/homebrew.md) for signing, notarization, and publication.
