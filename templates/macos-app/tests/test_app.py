@@ -155,8 +155,22 @@ class CLIAcceptance(unittest.TestCase):
     def test_xcode_test_runs_only_declared_product_scripts_in_order(self):
         self.use_xcode()
         self.call(["test", "--arch", "arm64"])
-        self.assertEqual(self.calls, [["env", "TEST_ARCH=arm64", "bash", str(self.root / "tools/first.sh")],
-                                      ["env", "TEST_ARCH=arm64", "bash", str(self.root / "tools/second.sh")]])
+        cache = f"TEST_MODULE_CACHE_PATH={self.root / '.build/app/debug/arm64/test-module-cache'}"
+        self.assertEqual(self.calls, [["env", "TEST_ARCH=arm64", cache, "bash", str(self.root / "tools/first.sh")],
+                                      ["env", "TEST_ARCH=arm64", cache, "bash", str(self.root / "tools/second.sh")]])
+
+    def test_regression_scripts_receive_configuration_and_architecture_scoped_cache(self):
+        self.use_xcode()
+        (self.root / "tools/first.sh").write_text('printf "%s\\n%s\\n" "$TEST_ARCH" "$TEST_MODULE_CACHE_PATH" > "$1"\n')
+        for configuration, arch in (("debug", "arm64"), ("release", "arm64"), ("debug", "x86_64")):
+            with self.subTest(configuration=configuration, arch=arch):
+                self.calls.clear()
+                self.call(["test", "--configuration", configuration, "--arch", arch])
+                expected = self.root / ".build/app" / configuration / arch / "test-module-cache"
+                output = self.root / "received-env.txt"
+                subprocess.run([*self.calls[0], str(output)], check=True)
+                self.assertEqual(output.read_text().splitlines(), [arch, str(expected)])
+                self.assertFalse(expected.exists())
 
     def test_xcode_compile_and_sign_failure_preserve_previous_running_app(self):
         self.use_xcode()
@@ -297,9 +311,10 @@ class CLIAcceptance(unittest.TestCase):
         self.write_config()
         self.call(["test", "--arch", "arm64"])
         self.assertEqual(self.calls[0][:2], ["swift", "test"])
+        cache = f"TEST_MODULE_CACHE_PATH={self.root / '.build/app/debug/arm64/test-module-cache'}"
         self.assertEqual(self.calls[1:], [
-            ["env", "TEST_ARCH=arm64", "bash", str(self.root / "tools/wrapper.sh")],
-            ["env", "TEST_ARCH=arm64", "python3", "-B", str(self.root / "tools/fixture.py")]])
+            ["env", "TEST_ARCH=arm64", cache, "bash", str(self.root / "tools/wrapper.sh")],
+            ["env", "TEST_ARCH=arm64", cache, "python3", "-B", str(self.root / "tools/fixture.py")]])
 
     def test_offline_regression_failure_stops_later_checks_and_propagates(self):
         (self.root / "tools").mkdir()

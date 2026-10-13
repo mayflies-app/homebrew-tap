@@ -151,6 +151,12 @@ successful branch pushes can save Debug caches scoped by GitHub to that branch;
 release execution can save Release caches on the default branch. Cache entries exclude
 distribution artifacts and credentials, and every required check still runs.
 
+Compilation caches retain tracked-input hashes and timestamps. Restores preserve
+timestamps only when file content, mode and checkout path still match; changed or
+new inputs keep their current timestamps and rebuild normally. Regression scripts
+share a compiler module cache within the same configuration and architecture,
+while each fixture and test execution remains independent.
+
 The minimum runtime macOS version is an app setting. See [distribution preparation](../../docs/homebrew.md)
 for credentials, notarization, and cask publication. The configured repository must
 match the repository running the release workflow.

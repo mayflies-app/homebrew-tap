@@ -62,6 +62,11 @@ Release execution on the default branch may save Release caches. `dist`,
 signing material, and notarization receipts are excluded. Cache hits never skip
 validation, signing, notarization, or public download verification.
 
+Tracked-input timestamps are reused only when content hashes, modes and checkout
+paths match the saved cache. Changed inputs still rebuild. Ordinary regression
+scripts share SDK compiler modules inside the existing build cache; fixtures and
+test execution are created afresh.
+
 ## Credentials
 
 Configure these secrets in each app repository. Signing and notarization require the
