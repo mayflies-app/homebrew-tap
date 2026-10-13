@@ -33,7 +33,9 @@ for a locally signed Universal app and DMG. Packaging does not submit notarizati
 
 `release` defaults to a dry run. `--execute` is restricted to manual CI; `--publish`
 also publishes the release and updates the cask. Workflow defaults are `dry_run: true`
-and `publish: false`.
+and `publish: false`. Release execution produces one Universal package containing
+arm64 and x86_64, with one DMG signing and notarization submission. Local `package`
+continues to support all declared architecture options.
 
 ## Configuration
 
@@ -137,7 +139,17 @@ Choose verification by the affected behavior:
 
 ## CI and Distribution
 
-CI uses the GitHub-hosted `xcode-27` runner, Xcode 27, and SDK 27. The minimum runtime
-macOS version is an app setting. See [distribution preparation](../../docs/homebrew.md)
+CI and release execution use the GitHub-hosted `xcode-27` runner, Xcode 27, and SDK 27.
+Pure release previews run separately on `ubuntu-latest`. Ordinary CI cancels older
+runs for the same ref; release execution remains serialized without cancellation.
+Tests and app builds run in order so they can share the native Debug compilation cache.
+
+Debug and Release caches have separate namespaces and paths. Keys include the actual
+toolchain fingerprint, OS/CPU, dependency/configuration hashes, and source SHA, with
+fallback restricted to the same compiler and dependency prefix. PRs only restore;
+successful default-branch pushes and release execution can save. Cache entries exclude
+distribution artifacts and credentials, and every required check still runs.
+
+The minimum runtime macOS version is an app setting. See [distribution preparation](../../docs/homebrew.md)
 for credentials, notarization, and cask publication. The configured repository must
 match the repository running the release workflow.

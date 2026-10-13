@@ -1,5 +1,6 @@
 """Behavioral release boundaries. Never calls signing services or GitHub."""
 import copy
+import contextlib
 import io
 import json
 import os
@@ -132,6 +133,60 @@ class ContractTests(unittest.TestCase):
                 with self.subTest(sentinel=sentinel), self.assertRaisesRegex(ValueError, "timestamp"):
                     c.verify_manifest(CONFIG, bad, dmg, promotion=True)
 
+    def test_collection_accepts_universal_only_and_full_architecture_groups(self):
+        for architectures in (("universal",), c.ARCHITECTURES):
+            with self.subTest(architectures=architectures), tempfile.TemporaryDirectory() as td:
+                for arch in architectures:
+                    fixture(td, arch)
+                manifests, files = c.collect(CONFIG, td, "1.2.3", COMMIT, promotion=True)
+                self.assertEqual([m["architecture"] for m in manifests], list(architectures))
+                self.assertEqual({p.name for p in files}, {c.artifact_name(CONFIG, "1.2.3", arch).removesuffix(".dmg") + suffix
+                                                        for arch in architectures for suffix in (".dmg", ".json", ".dmg.sha256", ".notary.json")})
+                universal = next(m for m in manifests if m["architecture"] == "universal")
+                self.assertEqual(universal["bundle"]["architectures"], ["arm64", "x86_64"])
+
+    def test_collection_rejects_partial_missing_unknown_and_duplicate_dmg_groups(self):
+        for architectures in ((), ("arm64",), ("arm64", "x86_64"), ("arm64", "universal"), ("x86_64", "universal")):
+            with self.subTest(architectures=architectures), tempfile.TemporaryDirectory() as td:
+                for arch in architectures:
+                    fixture(td, arch)
+                with self.assertRaises(ValueError):
+                    c.collect(CONFIG, td, "1.2.3", COMMIT, promotion=True)
+        for architectures in (("universal",), c.ARCHITECTURES):
+            for extra in ("unknown", "duplicate"):
+                with self.subTest(architectures=architectures, extra=extra), tempfile.TemporaryDirectory() as td:
+                    for arch in architectures:
+                        fixture(td, arch)
+                    if extra == "unknown":
+                        (Path(td) / "unrelated.dmg").write_bytes(b"unexpected artifact")
+                    else:
+                        nested = Path(td) / "nested"
+                        nested.mkdir()
+                        fixture(nested, "universal")
+                    with self.assertRaisesRegex(ValueError, "Unexpected DMG|exactly one"):
+                        c.collect(CONFIG, td, "1.2.3", COMMIT, promotion=True)
+
+    def test_universal_collection_retains_checksum_receipt_source_and_signature_gates(self):
+        for invalid in ("checksum", "receipt", "source", "team", "slices"):
+            with self.subTest(invalid=invalid), tempfile.TemporaryDirectory() as td:
+                dmg, manifest = fixture(td)
+                error = {"checksum": "checksum", "receipt": "receipt bytes", "source": "source mismatch",
+                         "team": "consistent team", "slices": "architecture/identity"}[invalid]
+                if invalid == "checksum":
+                    dmg.with_suffix(".dmg.sha256").write_text(f"{'0' * 64}  {dmg.name}\n")
+                elif invalid == "receipt":
+                    dmg.with_suffix(".notary.json").write_text(json.dumps({"status": "Accepted", "id": "submission-universal", "changed": True}))
+                else:
+                    if invalid == "source":
+                        manifest["source"]["commit"] = "b" * 40
+                    elif invalid == "team":
+                        manifest["bundle"]["executableSignature"]["teamIdentifier"] = "WRONG"
+                    else:
+                        manifest["bundle"]["architectures"] = ["arm64"]
+                    dmg.with_suffix(".json").write_text(json.dumps(manifest))
+                with self.assertRaisesRegex(ValueError, error):
+                    c.collect(CONFIG, td, "1.2.3", COMMIT, promotion=True)
+
     def test_mutated_final_dmg_or_receipt_invalidates_collection(self):
         with tempfile.TemporaryDirectory() as td:
             for arch in c.ARCHITECTURES:
@@ -155,6 +210,15 @@ class ContractTests(unittest.TestCase):
             fixture(td, "universal")
             with self.assertRaisesRegex(ValueError, "share build"):
                 c.collect(CONFIG, td, "1.2.3", COMMIT)
+        for field, value in (("commit", "b" * 40), ("dirty", True)):
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as td:
+                for arch in c.ARCHITECTURES:
+                    dmg, manifest = fixture(td, arch)
+                    if arch == "arm64":
+                        manifest["source"][field] = value
+                        dmg.with_suffix(".json").write_text(json.dumps(manifest))
+                with self.assertRaisesRegex(ValueError, "share build number and source state"):
+                    c.collect(CONFIG, td, "1.2.3")
 
     def test_promotion_rejects_individually_valid_architectures_from_different_teams(self):
         with tempfile.TemporaryDirectory() as td:
@@ -384,6 +448,62 @@ out.mkdir()
             self.assertTrue(output.is_dir())
             self.assertTrue((output / "SampleApp-1.2.3-arm64.json").is_file())
 
+    def test_package_owner_environment_excludes_secrets_after_import_without_changing_parent(self):
+        private_names = ("MACOS_CERTIFICATE", "MACOS_CERTIFICATE_PASSWORD", "MACOS_KEYCHAIN_PASSWORD",
+                         "APPLE_NOTARIZATION_PRIVATE_KEY", "HOMEBREW_TAP_TOKEN", "GH_TOKEN", "GITHUB_TOKEN")
+        parent = {name: "fixture-only-" + name.lower() for name in private_names}
+        parent.update(MACOS_SIGNING_IDENTITY="fixture Developer ID identity", MACOS_TEAM_ID="FIXTURETEAM",
+                      DEVELOPER_DIR="/fixture/Xcode/Contents/Developer", PATH="/fixture/tools",
+                      APPLE_NOTARIZATION_KEY_ID="fixture-key-id", APPLE_NOTARIZATION_ISSUER_ID="fixture-issuer")
+        for signed, notarized in ((False, False), (True, False), (True, True)):
+            with self.subTest(signed=signed, notarized=notarized), tempfile.TemporaryDirectory() as td:
+                config = self.owner_fixture(td)
+                output = Path(td) / "dist/release/universal"
+                imported_environment = dict(parent, CODE_SIGN_KEYCHAIN="/fixture/imported.keychain-db",
+                                            KEYCHAIN_PATH="/fixture/imported.keychain-db")
+                owner_environments = []
+                import_finished = False
+                @contextlib.contextmanager
+                def import_keychain():
+                    nonlocal import_finished
+                    # Certificate import still needs the unchanged private parent values.
+                    self.assertEqual(dict(os.environ), parent)
+                    import_finished = True
+                    yield imported_environment
+                def owner(args, **kwargs):
+                    if signed:
+                        self.assertTrue(import_finished)
+                    owner_environments.append(dict(kwargs.get("env", os.environ)))
+                    output.resolve().mkdir()
+                def notary(*args):
+                    # Apple submission receives the parent's private key after packaging.
+                    self.assertEqual(dict(os.environ), parent)
+                manifest = {"artifact": {"sha256": "e" * 64}, "notarization": {"status": "accepted" if notarized else "not-requested"}}
+                with patch.dict(os.environ, parent, clear=True), \
+                     patch.object(ci_security, "temporary_keychain", side_effect=import_keychain) as keychain, \
+                     patch.object(c, "run", side_effect=owner), \
+                     patch.object(ci_security, "notarize", side_effect=notary) as submit, \
+                     patch.object(c, "create_manifest", return_value=manifest), contextlib.redirect_stdout(io.StringIO()):
+                    ci_prepare.prepare(config, "1.2.3", "1", "universal", output, signed=signed, notarized=notarized)
+                    self.assertEqual(dict(os.environ), parent)
+                self.assertEqual(len(owner_environments), 1)
+                child = owner_environments[0]
+                self.assertFalse(set(private_names) & set(child))
+                for name in ("MACOS_SIGNING_IDENTITY", "MACOS_TEAM_ID", "DEVELOPER_DIR", "PATH"):
+                    self.assertEqual(child[name], parent[name])
+                if signed:
+                    keychain.assert_called_once_with()
+                    for name in ("CODE_SIGN_KEYCHAIN", "KEYCHAIN_PATH"):
+                        self.assertEqual(child[name], imported_environment[name])
+                else:
+                    keychain.assert_not_called()
+                if notarized:
+                    submit.assert_called_once()
+                else:
+                    submit.assert_not_called()
+                self.assertEqual(imported_environment, dict(parent, CODE_SIGN_KEYCHAIN="/fixture/imported.keychain-db",
+                                                            KEYCHAIN_PATH="/fixture/imported.keychain-db"))
+
     def test_invalid_ci_prepare_inputs_do_not_create_parents_or_call_an_owner(self):
         for invalid in ("version", "arch", "relative", "outside", "symlink", "existing"):
             with self.subTest(invalid=invalid), tempfile.TemporaryDirectory() as td:
@@ -434,6 +554,59 @@ out.mkdir()
             with self.assertRaisesRegex(ValueError, "developer directory"):
                 ci_prepare.verify_toolchain(str(Path(td) / "missing"))
             command.assert_not_called()
+
+    def test_toolchain_cache_fingerprint_is_stable_and_tracks_exact_builds(self):
+        readings = ["Xcode 27.0\nBuild version 18A1\n", "27.0\n", "Apple Swift version 6.4 (swiftlang-6.4.0.1)\nTarget: arm64-apple-macosx27.0\n"]
+        with tempfile.TemporaryDirectory() as td, patch.object(ci_prepare.platform, "machine", return_value="arm64"):
+            def verify(versions):
+                with patch.object(c, "output", side_effect=versions):
+                    return ci_prepare.verify_toolchain(td)
+            baseline = verify(readings)
+            self.assertEqual(baseline["cacheFingerprint"], c.hashlib.sha256((readings[0] + "\n27.0\n" + readings[2]).encode()).hexdigest())
+            self.assertEqual(verify(readings)["cacheFingerprint"], baseline["cacheFingerprint"])
+            for index, changed in ((0, readings[0].replace("18A1", "18A2")), (2, readings[2].replace("6.4.0.1", "6.4.0.2"))):
+                versions = list(readings)
+                versions[index] = changed
+                with self.subTest(index=index):
+                    result = verify(versions)
+                    self.assertEqual((result["xcode"], result["swift"]), (baseline["xcode"], baseline["swift"]))
+                    self.assertNotEqual(result["cacheFingerprint"], baseline["cacheFingerprint"])
+
+    def test_toolchain_native_architecture_normalizes_aliases_and_rejects_unknown(self):
+        readings = ["Xcode 27.0\nBuild version 18A1\n", "27.0\n", "Apple Swift version 6.4\n"]
+        with tempfile.TemporaryDirectory() as td:
+            for native, expected in (("arm64", "arm64"), ("aarch64", "arm64"), ("x86_64", "x86_64"), ("AMD64", "x86_64")):
+                with self.subTest(native=native), patch.object(c, "output", side_effect=readings), patch.object(ci_prepare.platform, "machine", return_value=native):
+                    self.assertEqual(ci_prepare.verify_toolchain(td)["nativeArchitecture"], expected)
+            with patch.object(c, "output", side_effect=readings), patch.object(ci_prepare.platform, "machine", return_value="future-arch"), self.assertRaisesRegex(ValueError, "native build architecture"):
+                ci_prepare.verify_toolchain(td)
+
+    def test_toolchain_cli_appends_only_cache_metadata_and_runs_no_security_operations(self):
+        readings = ["Xcode 27.0\nBuild version 18A1\n", "27.0\n", "Apple Swift version 6.4\n"]
+        for output_enabled in (False, True):
+            with self.subTest(output_enabled=output_enabled), tempfile.TemporaryDirectory() as td:
+                output = Path(td) / "github-output"
+                if output_enabled:
+                    output.write_text("earlier=value\n")
+                environment = {"GITHUB_OUTPUT": str(output)} if output_enabled else {}
+                capture = io.StringIO()
+                with patch.dict(os.environ, environment, clear=True), \
+                     patch.object(ci_prepare, "DEVELOPER_DIRECTORY", td), \
+                     patch.object(ci_prepare.platform, "machine", return_value="aarch64"), \
+                     patch.object(c, "output", side_effect=readings) as command, \
+                     patch.object(c, "run", side_effect=AssertionError("external mutation")), \
+                     patch.object(ci_security, "temporary_keychain", side_effect=AssertionError("security operation")), \
+                     patch.object(ci_security, "notarize", side_effect=AssertionError("notary operation")), \
+                     contextlib.redirect_stdout(capture):
+                    result = ci_prepare.main(["verify-toolchain"])
+                self.assertEqual(json.loads(capture.getvalue()), result)
+                self.assertEqual([call.args[0] for call in command.call_args_list],
+                                 [["xcodebuild", "-version"], ["xcrun", "--sdk", "macosx", "--show-sdk-version"], ["xcrun", "swift", "--version"]])
+                if output_enabled:
+                    self.assertEqual(output.read_text(), f"earlier=value\nfingerprint={result['cacheFingerprint']}\narchitecture=arm64\n")
+                    self.assertEqual(list(Path(td).iterdir()), [output])
+                else:
+                    self.assertEqual(list(Path(td).iterdir()), [])
 
 
 

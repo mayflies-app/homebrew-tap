@@ -41,11 +41,25 @@ inspects the plan without building or making external requests.
 The manual **macOS release** workflow accepts `version`, `dry_run` (default `true`),
 and `publish` (default `false`). Leaving `version` empty reads `VERSION`.
 
-With `dry_run` disabled, manual CI calls `release --execute` to build arm64, x86_64,
-and Universal packages, sign with Developer ID, submit each DMG for notarization,
-and staple accepted results. Explicit `publish` also uploads
+Dry-run uses a separate `ubuntu-latest` job without Xcode or signing credentials.
+With `dry_run` disabled, manual CI calls `release --execute` to build one Universal
+package containing arm64 and x86_64, sign with Developer ID, submit its DMG once for
+notarization, and staple the accepted result. Explicit `publish` also uploads
 release assets, verifies downloaded bytes, and updates the tap. Both CI and release
-workflows use the GitHub-hosted `xcode-27` runner and select Xcode 27.
+execution use the GitHub-hosted `xcode-27` runner and select Xcode 27. The CLI
+`package --arch` options remain available for local single-architecture packages.
+
+Release execution stays serialized and does not cancel a running release. Preview
+runs have a separate concurrency group and can replace an older preview. Ordinary
+CI cancels superseded runs while retaining tests, bundle builds, and release-plan checks.
+
+Compilation caches contain only `.build/app/debug/<native architecture>` for CI or
+`.build/app/release` for releases. Their keys separate configurations, OS and CPU,
+actual Xcode/SDK/Swift fingerprints, dependency/configuration hashes, and source SHA.
+Fallback stays within the same toolchain and dependency prefix. Pull requests restore
+only; successful default-branch pushes or release execution may save caches. `dist`,
+signing material, and notarization receipts are excluded. Cache hits never skip
+validation, signing, notarization, or public download verification.
 
 ## Credentials
 
@@ -84,6 +98,8 @@ a read-only minor-version guard; apps requiring macOS 14 use `:sonoma`.
 ## Validation
 
 `bash scripts/check.sh` runs isolated template tests, Ruby syntax checks, and available
-actionlint checks. `--apps` also compares shared consumer files. Product tests, bundle
+actionlint checks. Hosted hub CI requires a pinned actionlint binary and caches it;
+Go setup and tool compilation run only on a cache miss. `--apps` also compares shared
+consumer files. Product tests, bundle
 validation, notarization, and Homebrew installation are separate checks performed
 by their respective app and release workflows.

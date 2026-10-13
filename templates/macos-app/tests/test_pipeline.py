@@ -20,7 +20,7 @@ COMMIT = 'a' * 40
 class PipelineTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         self.config = {'schemaVersion': 1, 'product': 'SampleApp', 'appName': 'Sample App',
                        'executable': 'SampleApp', 'bundleIdentifier': 'dev.sample.app',
                        'repository': 'mayflies-app/sample-app', 'caskToken': 'sample-app',
@@ -47,7 +47,9 @@ class PipelineTests(unittest.TestCase):
                 self.assertFalse(result['executed'])
                 self.assertFalse(result['credentialsValidated'])
                 self.assertEqual([s['architecture'] for s in result['steps'] if s['step'] == 'package'],
-                                 ['arm64', 'x86_64', 'universal'])
+                                 ['universal'])
+                for step in ('notarize', 'staple', 'verify-final-artifact'):
+                    self.assertEqual([s['architecture'] for s in result['steps'] if s['step'] == step], ['universal'])
                 self.assertEqual('update-cask' in [s['step'] for s in result['steps']], '--publish' in args)
                 if '--publish' in args:
                     tap = next(s for s in result['steps'] if s['step'] == 'update-cask')
@@ -100,11 +102,52 @@ class PipelineTests(unittest.TestCase):
              patch.object(pipeline.release, 'publish') as publish, \
              patch.object(pipeline.tap_update, 'remote_update') as tap:
             self.call(['--execute', '--build', '42'])
-            self.assertEqual([c.args[3] for c in prepare.call_args_list], ['arm64', 'x86_64', 'universal'])
+            self.assertEqual([c.args[3] for c in prepare.call_args_list], ['universal'])
             self.assertTrue(all(c.kwargs == {'signed': True, 'notarized': True} for c in prepare.call_args_list))
             self.assertTrue(all(c.args[2] == '42' for c in prepare.call_args_list))
             publish.assert_not_called()
             tap.assert_not_called()
+
+    def test_universal_prepare_failure_stops_collection_and_publication(self):
+        env = {'GITHUB_ACTIONS': 'true', 'GITHUB_EVENT_NAME': 'workflow_dispatch', 'GH_TOKEN': 'fixture', 'GITHUB_SHA': COMMIT}
+        with patch.dict(os.environ, env, clear=True), \
+             patch.object(pipeline.contract, 'source_state', return_value={'commit': COMMIT, 'dirty': False}), \
+             patch.object(pipeline.release, 'github_json', return_value={'visibility': 'public'}), \
+             patch.object(pipeline.ci_prepare, 'verify_toolchain'), \
+             patch.object(pipeline.release, 'main', return_value={'reuse': False}), \
+             patch.object(pipeline.ci_prepare, 'prepare', side_effect=ValueError('fixture package failure')) as prepare, \
+             patch.object(pipeline.contract, 'collect') as collect, \
+             patch.object(pipeline.release, 'publish') as publish, \
+             patch.object(pipeline.tap_update, 'remote_update') as tap:
+            with self.assertRaisesRegex(ValueError, 'fixture package failure'):
+                self.call(['--execute', '--publish'])
+            self.assertEqual(prepare.call_args.args[3], 'universal')
+            collect.assert_not_called()
+            publish.assert_not_called()
+            tap.assert_not_called()
+
+    def test_new_publication_uses_publish_proof_for_cask_without_reverification(self):
+        env = {'GITHUB_ACTIONS': 'true', 'GITHUB_EVENT_NAME': 'workflow_dispatch', 'GH_TOKEN': 'app-token',
+               'HOMEBREW_TAP_TOKEN': 'tap-token', 'GITHUB_SHA': COMMIT}
+        with patch.dict(os.environ, env, clear=True), \
+             patch.object(pipeline.contract, 'source_state', return_value={'commit': COMMIT, 'dirty': False}), \
+             patch.object(pipeline.release, 'github_json', return_value={'visibility': 'public'}), \
+             patch.object(pipeline.ci_prepare, 'verify_toolchain'), \
+             patch.object(pipeline.release, 'main', return_value={'reuse': False}), \
+             patch.object(pipeline.ci_prepare, 'prepare') as prepare, \
+             patch.object(pipeline.contract, 'collect') as collect, \
+             patch.object(pipeline.release, 'publish', return_value={'artifact': {'sha256': 'f' * 64}}) as publish, \
+             patch.object(pipeline.release, 'verify_public_release', side_effect=AssertionError('duplicate public download')), \
+             patch.object(pipeline.contract, 'run'), \
+             patch.object(pipeline.tap_update, 'remote_update') as tap:
+            self.call(['--execute', '--publish'])
+            self.assertEqual([c.args[3] for c in prepare.call_args_list], ['universal'])
+            self.assertEqual(prepare.call_args.kwargs, {'signed': True, 'notarized': True})
+            collect.assert_called_once_with(self.config, self.root / 'dist/release', '1.2.3', COMMIT, promotion=True)
+            publish.assert_called_once_with(self.config, '1.2.3', COMMIT, self.root / 'dist/release')
+            candidate = self.root / '.build/promotion.rb'
+            self.assertEqual(candidate.read_text(), pipeline.contract.cask_text(self.config, '1.2.3', 'f' * 64))
+            self.assertEqual(tap.call_args.args[2], candidate)
 
     def test_public_reuse_never_rebuilds_and_tap_uses_own_token(self):
         env = {'GITHUB_ACTIONS': 'true', 'GITHUB_EVENT_NAME': 'workflow_dispatch', 'GH_TOKEN': 'app-token',
@@ -115,12 +158,15 @@ class PipelineTests(unittest.TestCase):
              patch.object(pipeline.ci_prepare, 'verify_toolchain'), \
              patch.object(pipeline.release, 'main', return_value={'reuse': True}), \
              patch.object(pipeline.ci_prepare, 'prepare') as prepare, \
-             patch.object(pipeline.release, 'publish'), \
-             patch.object(pipeline.release, 'verify_public_release', return_value={'artifact': {'sha256': 'e' * 64}}), \
+             patch.object(pipeline.contract, 'collect') as collect, \
+             patch.object(pipeline.release, 'publish', return_value={'artifact': {'sha256': 'e' * 64}}), \
+             patch.object(pipeline.release, 'verify_public_release', side_effect=AssertionError('duplicate public download')), \
              patch.object(pipeline.contract, 'run') as run, \
              patch.object(pipeline.tap_update, 'remote_update', side_effect=lambda *a: self.assertEqual(os.environ['GH_TOKEN'], 'tap-token')) as tap:
             self.call(['--execute', '--publish'])
             prepare.assert_not_called()
+            collect.assert_not_called()
+            self.assertIn('e' * 64, (self.root / '.build/promotion.rb').read_text())
             self.assertEqual(os.environ['GH_TOKEN'], 'app-token')
             calls = [list(map(str, c.args[0])) for c in run.call_args_list]
             clone = next(c for c in calls if 'clone' in c)
