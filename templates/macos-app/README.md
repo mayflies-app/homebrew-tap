@@ -147,7 +147,8 @@ Tests and app builds run in order so they can share the native Debug compilation
 Debug and Release caches have separate namespaces and paths. Keys include the actual
 toolchain fingerprint, OS/CPU, dependency/configuration hashes, and source SHA, with
 fallback restricted to the same compiler and dependency prefix. PRs only restore;
-successful default-branch pushes and release execution can save. Cache entries exclude
+successful branch pushes can save Debug caches scoped by GitHub to that branch;
+release execution can save Release caches on the default branch. Cache entries exclude
 distribution artifacts and credentials, and every required check still runs.
 
 The minimum runtime macOS version is an app setting. See [distribution preparation](../../docs/homebrew.md)

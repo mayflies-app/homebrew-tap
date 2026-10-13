@@ -57,7 +57,8 @@ Compilation caches contain only `.build/app/debug/<native architecture>` for CI 
 `.build/app/release` for releases. Their keys separate configurations, OS and CPU,
 actual Xcode/SDK/Swift fingerprints, dependency/configuration hashes, and source SHA.
 Fallback stays within the same toolchain and dependency prefix. Pull requests restore
-only; successful default-branch pushes or release execution may save caches. `dist`,
+only; successful branch pushes may save Debug caches within GitHub's branch scope.
+Release execution on the default branch may save Release caches. `dist`,
 signing material, and notarization receipts are excluded. Cache hits never skip
 validation, signing, notarization, or public download verification.
 
