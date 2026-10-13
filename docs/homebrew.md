@@ -63,9 +63,11 @@ signing material, and notarization receipts are excluded. Cache hits never skip
 validation, signing, notarization, or public download verification.
 
 Tracked-input timestamps are reused only when content hashes, modes and checkout
-paths match the saved cache. Changed inputs still rebuild. Ordinary regression
-scripts share SDK compiler modules inside the existing build cache; fixtures and
-test execution are created afresh.
+paths match the saved cache. Asset catalog and icon directory timestamps require
+an identical complete tracked tree. Changed inputs still rebuild. Xcode builds on
+GitHub Actions disable the SDK file-status index; local builds retain Xcode's
+default. Ordinary regression scripts share SDK compiler modules inside the
+existing build cache; fixtures and test execution are created afresh.
 
 ## Credentials
 

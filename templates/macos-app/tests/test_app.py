@@ -108,13 +108,15 @@ class CLIAcceptance(unittest.TestCase):
 
     def test_xcode_build_preserves_complete_bundle_and_signs_with_product_entitlements(self):
         self.use_xcode()
-        self.call(["build", "--arch", "arm64", "--sign", "ad-hoc"])
+        with patch.dict(os.environ, {"GITHUB_ACTIONS": "true"}):
+            self.call(["build", "--arch", "arm64", "--sign", "ad-hoc"])
         bundle = self.root / "dist/dev/Example App.app"
         self.assertEqual((bundle / "Contents/Resources/Assets.car").read_bytes(), b"compiled asset catalog")
         self.assertTrue((bundle / "Contents/Resources/en.lproj/Localizable.strings").is_file())
         self.assertEqual(plistlib.loads((bundle / "Contents/Info.plist").read_bytes())["NSPrincipalClass"], "NSApplication")
         build = next(c for c in self.calls if c[0] == "xcodebuild")
         self.assertIn("CODE_SIGNING_ALLOWED=NO", build)
+        self.assertIn("SDK_STAT_CACHE_ENABLE=NO", build)
         # CLI signing owns the complete main executable. Xcode's debug dylib
         # shim leaves separately signed code and causes a real dyld Team mismatch.
         self.assertIn("ENABLE_DEBUG_DYLIB=NO", build)
@@ -126,12 +128,13 @@ class CLIAcceptance(unittest.TestCase):
     def test_xcode_universal_build_uses_both_architectures_and_common_package_manifest(self):
         self.use_xcode()
         manifest = types.SimpleNamespace(create_manifest=lambda *args: {"artifact": {"sha256": "b" * 64}})
-        with patch.object(app, "import_local", return_value=manifest):
+        with patch.object(app, "import_local", return_value=manifest), patch.dict(os.environ, {"GITHUB_ACTIONS": "false"}):
             self.call(["package"])
         builds = [c for c in self.calls if c[0] == "xcodebuild"]
         self.assertEqual(len(builds), 1)
         self.assertIn("ARCHS=arm64 x86_64", builds[0])
         self.assertIn("ONLY_ACTIVE_ARCH=NO", builds[0])
+        self.assertFalse(any(arg.startswith("SDK_STAT_CACHE_ENABLE=") for arg in builds[0]))
         self.assertEqual(builds[0][builds[0].index("-configuration") + 1], "Release")
         self.assertTrue((self.root / "dist/release/universal/Example-1.2.3-universal.dmg.sha256").is_file())
 
