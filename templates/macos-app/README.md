@@ -17,6 +17,8 @@ keys and format arguments in both languages; preserve user and service content.
 
 ## Command-Line Workflow
 
+Run app commands from the target app repository root.
+
 | Command | Default behavior |
 | --- | --- |
 | `./scripts/app.py build` | Debug, native architecture, automatic local signing; `dist/dev/<Product>.app` |
@@ -43,7 +45,8 @@ BigBang uses `mayflies-app/big-bang`, while DockAutoHide uses `mayflies-app/Dock
 Chinese (`zh-Hans`); documents are English.
 
 Start with `starter/macos-app.json` and `starter/AGENTS.md`, set the actual identity
-and resources, and register the checkout in `catalog/apps.json`.
+and resources, and register the checkout in `catalog/apps.json`. Run synchronization
+commands from the homebrew-tap repository root:
 
 ```sh
 python3 -B scripts/sync_apps.py --app ExampleApp --check
@@ -105,6 +108,32 @@ Every app has `README.md`, `CONTRIBUTING.md`, and `AGENTS.md`, plus
 `docs/releasing.md`. Describe the implemented product, supported workflows, and
 required configuration. Keep validation artifacts in temporary output directories
 and commit history in Git.
+
+## Shared Maintenance
+
+The tap owns `scripts/`, `.github/workflows/ci.yml`, and
+`.github/workflows/release.yml` copied to each app. Catalog entries also select the
+destinations for `MacAppDesign.swift` and `LocalizationResources.swift`. Edit these
+files in this template and compare consumers with `python3 -B scripts/sync_apps.py --check`
+from the tap root. Review local and staged changes in the managed destinations before
+using `--apply` for the intended apps: copying replaces unstaged edits and refuses
+to overwrite staged files that differ from the template. Review the resulting
+source and consumer diffs and commit them in their respective repositories.
+
+Each app owns `macos-app.json`, `VERSION`, its native Xcode project, any Swift package,
+Codex Run configuration, translations, product code, and targeted checks. App documents
+follow the organization above and retain the product's actual requirements and behavior.
+The starter files are examples to configure, not synchronized consumer files.
+
+Choose verification by the affected behavior:
+
+- Documentation only: check links, referenced paths, and `git diff --check`.
+- Configuration or workflow changes: check syntax, referenced identities and paths,
+  and the affected command or workflow contract. Compare shared bytes when applicable.
+- Executable shared tooling: run `bash scripts/check.sh` in the tap; use `--apps`
+  after synchronization. Run affected app checks when the change affects consumers.
+- Product behavior: use the app's common `test` entrypoint and targeted checks from
+  its development guide. Build, package, or inspect native UI only when affected.
 
 ## CI and Distribution
 
