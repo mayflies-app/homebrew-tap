@@ -35,7 +35,13 @@ for a locally signed Universal app and DMG. Packaging does not submit notarizati
 `release` defaults to a dry run. `--execute` is restricted to manual CI; `--publish`
 also publishes the release and updates the cask. Workflow defaults are `dry_run: true`
 and `publish: false`. Release execution produces one Universal package containing
-arm64 and x86_64, with one DMG signing and notarization submission. Local `package`
+arm64 and x86_64. The workflow separates `preflight`, `package`, `notarize`, `publish`
+and `cask` jobs; dry-run uses `preview`. Jobs call the same release entrypoint with
+CI-only `--stage` selectors and scoped credentials. Artifact IDs carry exact inputs
+across retries; a tar preserves the signed app bundle. Failed notarization resumes a
+retained submission ID, draft publication uploads only missing matching assets, and
+a cask retry does not rebuild or republish. See [release retries](../../docs/homebrew.md#retry-a-failed-job).
+Local `package`
 continues to support all declared architecture options.
 
 ## Configuration

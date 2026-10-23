@@ -750,6 +750,7 @@ elif args == ["default-keychain", "-d", "user"]:
         with tempfile.TemporaryDirectory() as td:
             env = {"RUNNER_TEMP": td, "APPLE_NOTARIZATION_PRIVATE_KEY": "-----BEGIN PRIVATE KEY-----\nfixture\n-----END PRIVATE KEY-----", "APPLE_NOTARIZATION_KEY_ID": "KEY", "APPLE_NOTARIZATION_ISSUER_ID": "ISSUER", "MACOS_TEAM_ID": "TEAM"}
             receipt = Path(td) / "receipt.json"
+            (Path(td) / "sample.dmg").write_bytes(b"signed package")
             with patch.object(c, "signature_details"), patch.object(c, "run") as run, patch.object(ci_security.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, stdout='{"status":"Invalid","id":"failed"}', stderr="")):
                 with self.assertRaisesRegex(ValueError, "Accepted"):
                     ci_security.notarize(Path(td) / "sample.dmg", receipt, env)
@@ -768,6 +769,7 @@ elif args == ["default-keychain", "-d", "user"]:
             with self.subTest(stdout=stdout, code=code), tempfile.TemporaryDirectory() as td:
                 env = {"RUNNER_TEMP": td, "APPLE_NOTARIZATION_PRIVATE_KEY": "-----BEGIN PRIVATE KEY-----\nsensitive-fixture\n-----END PRIVATE KEY-----", "APPLE_NOTARIZATION_KEY_ID": "KEY", "APPLE_NOTARIZATION_ISSUER_ID": "ISSUER"}
                 receipt = Path(td) / "receipt.json"
+                (Path(td) / "sample.dmg").write_bytes(b"signed package")
                 result = subprocess.CompletedProcess([], code, stdout=stdout, stderr=stderr)
                 with patch.object(c, "signature_details"), patch.object(c, "run") as run, patch.object(ci_security.subprocess, "run", return_value=result) as external:
                     with self.assertRaises(RuntimeError) as failure:
@@ -787,6 +789,7 @@ elif args == ["default-keychain", "-d", "user"]:
         with tempfile.TemporaryDirectory() as td:
             env = {"RUNNER_TEMP": td, "APPLE_NOTARIZATION_PRIVATE_KEY": "-----BEGIN PRIVATE KEY-----\nfixture\n-----END PRIVATE KEY-----", "APPLE_NOTARIZATION_KEY_ID": "KEY", "APPLE_NOTARIZATION_ISSUER_ID": "ISSUER"}
             receipt = Path(td) / "receipt.json"
+            (Path(td) / "sample.dmg").write_bytes(b"signed package")
             stdout = '{"status":"Error"}'
             with patch.object(c, "signature_details"), patch.object(c, "run") as run, patch.object(ci_security.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, stdout=stdout, stderr="")) as external:
                 with self.assertRaisesRegex(RuntimeError, "JSON receipt retained; no submission ID"):

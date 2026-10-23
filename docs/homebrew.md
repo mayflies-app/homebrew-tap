@@ -41,13 +41,50 @@ inspects the plan without building or making external requests.
 The manual **macOS release** workflow accepts `version`, `dry_run` (default `true`),
 and `publish` (default `false`). Leaving `version` empty reads `VERSION`.
 
-Dry-run uses a separate `ubuntu-latest` job without Xcode or signing credentials.
-With `dry_run` disabled, manual CI calls `release --execute` to build one Universal
-package containing arm64 and x86_64, sign with Developer ID, submit its DMG once for
-notarization, and staple the accepted result. Explicit `publish` also uploads
-release assets, verifies downloaded bytes, and updates the tap. Both CI and release
-execution use the GitHub-hosted `xcode-27` runner and select Xcode 27. The CLI
+Dry-run uses a separate `preview` job on `ubuntu-latest`, without credentials or
+build-cache access. Execution calls the same `./scripts/app.py release --execute`
+entrypoint with a CI-only `--stage` selector:
+
+| Job | Runner | Responsibility and credentials |
+| --- | --- | --- |
+| `preflight` | `ubuntu-latest` | Validate clean source, version and publication eligibility; read-only GitHub token |
+| `package` | GitHub-hosted `xcode-27`, Xcode 27 | Build and Developer ID sign one Universal app and DMG; signing secrets only |
+| `notarize` | GitHub-hosted `xcode-27`, Xcode 27 | Verify the signed input, submit or resume notarization, staple and verify final bytes; notarization secrets and Team ID |
+| `publish` | `ubuntu-latest` | Publish and anonymously verify assets; GitHub token with Contents write |
+| `cask` | `ubuntu-latest` | Verify public assets and update only the target cask; read-only app token and `HOMEBREW_TAP_TOKEN` |
+
+The chain is `preflight → package → notarize → publish → cask`. `publish=false`
+stops after notarization. A matching public version skips packaging and notarization;
+publication verifies the immutable existing release before cask promotion. The CLI
 `package --arch` options remain available for local single-architecture packages.
+
+### Retry a Failed Job
+
+Use GitHub Actions **Re-run failed jobs** or re-run the failed job itself. Successful
+upstream jobs are reused. Signed and notarized artifacts have attempt-specific names;
+downstream jobs consume their producer's artifact ID, including outputs from earlier
+attempts. Empty or invalid upstream IDs stop before download; they never fall back
+to downloading every artifact. The signed handoff is a tar archive preserving app
+executable modes and symlinks. Build cache saving belongs to `package` and does not wait for publication.
+
+- `notarize` restores this workflow run's latest retained submission checkpoint,
+  verifies the original signed DMG checksum, and waits on the known Apple submission
+  ID. Accepted submissions only need stapling and verification. State and Apple logs
+  are uploaded even on failure; credentials and the app bundle are excluded.
+- `publish` continues a draft only for the same version and source. Existing asset
+  bytes must match; only missing files are uploaded, without replacement. Empty
+  `starter` placeholders left by failed uploads are removed only after every completed
+  asset passes verification. A release published between checks is verified without
+  further writes. Publication verifies the completed draft and final public download.
+- `cask` retries public verification and tap promotion without rebuilding, notarizing
+  or republishing. Fix `HOMEBREW_TAP_TOKEN` before retrying an access failure.
+
+Keep upstream artifacts and notary state until completion; they use the repository's
+artifact retention policy. Expired inputs require a new workflow run. If a prior
+notary execution has no retained submission ID, inspect Apple submission history
+before starting a new run; an interrupted upload cannot prove whether Apple accepted
+it. Re-running all jobs can produce different signed bytes and cannot resume a
+checkpoint for another DMG. Changed source or configuration also requires a new run.
 
 Release execution stays serialized and does not cancel a running release. Preview
 runs have a separate concurrency group and can replace an older preview. Ordinary
@@ -97,7 +134,7 @@ app repository and explicit authorization to publish.
 Execution logs identify each stage with `stage=... status=started|completed`.
 Failures include a `kind`, an external exit code when available, and a GitHub
 error annotation. The stages distinguish preflight/toolchain, signing keychain,
-packaging, notarization submission/stapling/validation, final artifact verification,
+packaging, notarization submission/resume/stapling/validation, final artifact verification,
 publication, and tap clone/verification/refresh/commit/push.
 
 | Failure kind | What to check |
