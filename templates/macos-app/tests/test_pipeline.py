@@ -4,6 +4,7 @@ import importlib.util
 import io
 import json
 import os
+import subprocess
 from pathlib import Path
 import sys
 import tempfile
@@ -174,6 +175,34 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(tap.call_args.args[-1], 'mayflies-app/homebrew-tap')
             self.assertTrue(any('!gh auth git-credential' in c and 'config' in c for c in calls))
             self.assertFalse(any('tap-token' in ' '.join(c) for c in calls))
+
+    def test_tap_failure_reports_publication_completed_and_restores_app_token(self):
+        env = {'GITHUB_ACTIONS': 'true', 'GITHUB_EVENT_NAME': 'workflow_dispatch', 'GH_TOKEN': 'app-token',
+               'HOMEBREW_TAP_TOKEN': 'tap-token', 'GITHUB_SHA': COMMIT}
+        error = subprocess.CalledProcessError(128, ['git', 'SECRET-ARGUMENT'], stderr='remote: Bad credentials tap-token')
+        with patch.dict(os.environ, env, clear=True), \
+             patch.object(pipeline.contract, 'source_state', return_value={'commit': COMMIT, 'dirty': False}), \
+             patch.object(pipeline.release, 'github_json', return_value={'visibility': 'public'}), \
+             patch.object(pipeline.ci_prepare, 'verify_toolchain'), \
+             patch.object(pipeline.release, 'main', return_value={'reuse': True}), \
+             patch.object(pipeline.ci_prepare, 'prepare') as prepare, \
+             patch.object(pipeline.release, 'publish', return_value={'artifact': {'sha256': 'e' * 64}}) as publish, \
+             patch.object(pipeline.contract, 'run'), \
+             patch.object(pipeline.tap_update, 'remote_update', side_effect=error), \
+             contextlib.redirect_stderr(io.StringIO()) as output:
+            with self.assertRaises(subprocess.CalledProcessError):
+                self.call(['--execute', '--publish'])
+            self.assertEqual(os.environ['GH_TOKEN'], 'app-token')
+            publish.assert_called_once()
+            prepare.assert_not_called()
+        logs = output.getvalue()
+        self.assertIn('stage=publish status=completed', logs)
+        self.assertIn('https://github.com/mayflies-app/sample-app/releases/tag/v1.2.3', logs)
+        self.assertIn('do not roll back this release', logs)
+        self.assertIn('kind=authentication', logs)
+        self.assertLess(logs.index('stage=publish status=completed'), logs.index('status=failed'))
+        self.assertNotIn('tap-token', logs)
+        self.assertNotIn('SECRET-ARGUMENT', logs)
 
 
 if __name__ == '__main__':

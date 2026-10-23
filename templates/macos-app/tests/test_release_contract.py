@@ -796,6 +796,56 @@ elif args == ["default-keychain", "-d", "user"]:
             self.assertFalse(any("stapler" in map(str, call.args[0]) for call in run.call_args_list))
 
 
+class ReleaseDiagnosticTests(unittest.TestCase):
+    def test_github_api_failure_keeps_safe_http_diagnosis(self):
+        rejected = subprocess.CompletedProcess([], 1, 'SECRET-RESPONSE', 'gh: Bad credentials (HTTP 401)')
+        with patch.object(release.subprocess, 'run', return_value=rejected), contextlib.redirect_stderr(io.StringIO()) as output:
+            with self.assertRaises(subprocess.CalledProcessError) as raised:
+                release.github_json('repos/owner/sample-app')
+        self.assertIn('stage=github-api-read kind=authentication', c.failure_message(raised.exception))
+        self.assertNotIn('SECRET-RESPONSE', output.getvalue())
+
+    def test_external_failures_are_classified_without_echoing_commands_or_output(self):
+        cases = [("remote: Invalid username or token. Authentication failed", "authentication"),
+                 ("remote: Write access to repository not granted. HTTP 403", "authorization"),
+                 ("remote: Repository not found.", "repository-access"),
+                 ("fatal: Could not resolve host: github.com", "network"),
+                 ("! [rejected] HEAD -> main (fetch first)", "concurrent-update"),
+                 ("opaque tool failure", "external-command")]
+        for text, expected in cases:
+            with self.subTest(expected=expected):
+                error = subprocess.CalledProcessError(128, ["git", "SECRET-COMMAND"],
+                                                     output="SECRET-STDOUT", stderr=text + " SECRET-STDERR")
+                output = io.StringIO()
+                with patch.dict(os.environ, {"GITHUB_ACTIONS": "true"}), contextlib.redirect_stderr(output):
+                    with self.assertRaises(subprocess.CalledProcessError):
+                        with c.release_stage("tap-push"):
+                            raise error
+                message = output.getvalue()
+                self.assertIn("stage=tap-push", message)
+                self.assertIn("kind=" + expected, message)
+                self.assertIn("exit=128", message)
+                self.assertIn("::error", message)
+                self.assertIn("HOMEBREW_TAP_TOKEN", message)
+                self.assertIn(expected, c.failure_message(error))
+                for secret in ("SECRET-COMMAND", "SECRET-STDOUT", "SECRET-STDERR"):
+                    self.assertNotIn(secret, message)
+
+    def test_nested_stage_retains_original_validation_and_redacts_secrets(self):
+        output = io.StringIO()
+        with patch.dict(os.environ, {"GITHUB_ACTIONS": "true", "HOMEBREW_TAP_TOKEN": "fixture-private-token"}), \
+             contextlib.redirect_stderr(output):
+            with self.assertRaises(ValueError) as raised:
+                with c.release_stage("prepare"):
+                    with c.release_stage("notarization"):
+                        raise ValueError("Invalid receipt fixture-private-token\nunsafe next line")
+        self.assertEqual(output.getvalue().count("::error"), 1)
+        self.assertIn("stage=notarization", c.failure_message(raised.exception))
+        self.assertIn("kind=validation", output.getvalue())
+        self.assertNotIn("fixture-private-token", output.getvalue())
+        self.assertNotIn("\nunsafe next line", output.getvalue())
+
+
 class TapTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -852,6 +902,54 @@ class TapTests(unittest.TestCase):
             with self.subTest(version=version), self.assertRaisesRegex(ValueError, error):
                 tap_update.update(self.tap, CONFIG, self.candidate, version, write=True)
         self.assertIn('version "1.0.0"', self.target.read_text())
+
+    def promotion(self, pushes):
+        calls = []
+        def fake_git(tap, *arguments):
+            calls.append(arguments)
+            if arguments[:3] == ("remote", "get-url", "origin"):
+                return "https://github.com/mayflies-app/homebrew-tap.git"
+            if arguments == ("branch", "--show-current"):
+                return "main"
+            if arguments[:2] == ("diff", "--name-only") and arguments[-1] == "HEAD":
+                return "Casks/sample-app.rb\n"
+            return ""
+        with patch.object(tap_update, "check_checkout"), \
+             patch.object(tap_update, "git", side_effect=fake_git), \
+             patch.object(release, "verify_public_release", return_value={"artifact": {"sha256": "b" * 64}}), \
+             patch.object(tap_update, "update", return_value={"changed": True, "committed": True}), \
+             patch.object(tap_update.subprocess, "run", side_effect=pushes) as push:
+            try:
+                result = tap_update.remote_update(self.tap, CONFIG, self.candidate, "1.2.3", COMMIT, "main", "mayflies-app/homebrew-tap")
+            finally:
+                self.promotion_calls, self.promotion_push_count = calls, push.call_count
+        return result
+
+    def test_authentication_failure_stops_without_fetch_or_retry_and_retains_diagnosis(self):
+        for text, kind in [('Bad credentials. Authentication failed.', 'authentication'),
+                           ('Write access to repository not granted.', 'authorization'),
+                           ('Could not resolve host: github.com', 'network'),
+                           ('An unrecognized rejection', 'external-command')]:
+            failure = subprocess.CompletedProcess([], 128, "", text + " SECRET-RAW-TOKEN")
+            with self.subTest(kind=kind), contextlib.redirect_stderr(io.StringIO()) as output:
+                with self.assertRaises(subprocess.CalledProcessError) as raised:
+                    self.promotion([failure, failure, failure])
+            self.assertEqual(self.promotion_push_count, 1)
+            self.assertEqual(sum(args[0] == "fetch" for args in self.promotion_calls), 1)
+            self.assertIn("stage=tap-push", c.failure_message(raised.exception))
+            self.assertIn("kind=" + kind, c.failure_message(raised.exception))
+            self.assertNotIn("SECRET-RAW-TOKEN", output.getvalue())
+
+    def test_only_non_fast_forward_is_rebased_and_retried(self):
+        rejected = subprocess.CompletedProcess([], 1, "", "! [rejected] HEAD -> main (fetch first)")
+        accepted = subprocess.CompletedProcess([], 0, "", "")
+        with contextlib.redirect_stderr(io.StringIO()) as output:
+            result = self.promotion([rejected, accepted])
+        self.assertTrue(result["pushed"])
+        self.assertEqual(self.promotion_push_count, 2)
+        self.assertEqual(sum(args[0] == "rebase" for args in self.promotion_calls), 1)
+        self.assertIn("status=retry", output.getvalue())
+        self.assertNotIn("::error", output.getvalue())
 
 
 if __name__ == "__main__":

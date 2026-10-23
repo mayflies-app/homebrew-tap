@@ -92,6 +92,35 @@ issuer UUID and signing Team ID are separate values. A dry run validates the rel
 plan; executing the workflow validates credentials. Publication requires a public
 app repository and explicit authorization to publish.
 
+## Release Diagnostics
+
+Execution logs identify each stage with `stage=... status=started|completed`.
+Failures include a `kind`, an external exit code when available, and a GitHub
+error annotation. The stages distinguish preflight/toolchain, signing keychain,
+packaging, notarization submission/stapling/validation, final artifact verification,
+publication, and tap clone/verification/refresh/commit/push.
+
+| Failure kind | What to check |
+| --- | --- |
+| `authentication` | Invalid, revoked or expired credentials; tap operations use `HOMEBREW_TAP_TOKEN` |
+| `authorization` | Repository selection, Contents write, organization approval and branch rules |
+| `repository-access` | Repository spelling and access; HTTP 404 can also hide a private repository |
+| `network` | DNS, connectivity, GitHub availability or rate limits |
+| `concurrent-update` | A non-fast-forward branch update; only this push failure is rebased and retried, up to three attempts |
+| `configuration` / `validation` | Missing configuration or an identity, version, checksum, signing or notarization contract failure |
+| `tool-unavailable` / `external-command` / `operation` | Runner tools or an unclassified failure; inspect the preceding stage logs |
+
+Raw captured command arguments and output are omitted from error annotations to
+protect credentials. A generic failure is not evidence of an expired token or a
+concurrent update. Tap authentication, authorization and network failures stop
+without concurrency retries.
+
+The publication stage logs the verified release URL before tap promotion starts.
+A later tap failure does not roll back the published release. Preserve its immutable
+assets and prepare the cask from those public bytes; do not rebuild or replace the
+same version. A local recovery cask must match the public DMG, manifest, checksum,
+notarization receipt, version and source commit before it is reviewed for promotion.
+
 ## Homebrew Distribution
 
 Verify signing, notarization acceptance, stapling, and public asset contents separately.
