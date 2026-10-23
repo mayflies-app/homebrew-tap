@@ -107,11 +107,13 @@ class LocalJobRetries(unittest.TestCase):
         fixture(self.input)
         self.server = LocalRelease(self.root)
         self.env = {'GITHUB_ACTIONS': 'true', 'GITHUB_EVENT_NAME': 'workflow_dispatch',
-                    'GITHUB_SHA': COMMIT, 'GH_TOKEN': 'fixture-app-token', 'HOMEBREW_TAP_TOKEN': 'fixture-tap-token'}
+                    'GITHUB_SHA': COMMIT, 'GITHUB_REPOSITORY': CONFIG['repository'],
+                    'GH_TOKEN': 'fixture-app-token', 'HOMEBREW_TAP_TOKEN': 'fixture-tap-token',
+                    'PATH': os.environ.get('PATH', os.defpath)}
         self.stack = contextlib.ExitStack()
         self.addCleanup(self.temp.cleanup)
         self.addCleanup(self.stack.close)
-        self.stack.enter_context(patch.dict(os.environ, self.env))
+        self.stack.enter_context(patch.dict(os.environ, self.env, clear=True))
         self.stack.enter_context(patch.object(c, 'source_state', return_value={'commit': COMMIT, 'dirty': False}))
         self.stack.enter_context(patch.object(release, 'github_json', side_effect=self.server.api))
         self.stack.enter_context(patch.object(release.urllib.request, 'urlopen', side_effect=self.server.public_download))
