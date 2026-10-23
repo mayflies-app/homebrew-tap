@@ -1,13 +1,4 @@
-__pycache__/
-*.py[cod]
 .DS_Store
-dist/
-TestResults/
-*.xcarchive/
-.build/
-.swiftpm/
-*.xcresult/
-*.dSYM/
 *.p12
 *.p8
 .env
