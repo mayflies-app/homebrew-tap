@@ -1,6 +1,6 @@
 cask "bigbang" do
-  version "0.1.0"
-  sha256 "326848c357e65e53b9591d974447a469fdcfe2739f59451e913ce4b1c974827e"
+  version "0.2.0"
+  sha256 "1e0cfad2248a9e5470972450955924f5bcc71856bf9086f67a20e33db3db5f00"
 
   url "https://github.com/mayflies-app/big-bang/releases/download/v#{version}/BigBang-#{version}-universal.dmg"
   name "BigBang"
