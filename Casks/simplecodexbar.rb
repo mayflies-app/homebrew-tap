@@ -1,6 +1,6 @@
 cask "simplecodexbar" do
-  version "0.3.1"
-  sha256 "569d4145dcee5303816a210205d687077accdd541a08bcf664d34399077c9448"
+  version "0.3.2"
+  sha256 "b4f8f21ff231605ef52df53e95d83d23934d6c83ba5566dc32f8b4a901d220a3"
 
   url "https://github.com/mayflies-app/simple-codex-bar/releases/download/v#{version}/SimpleCodexBar-#{version}-universal.dmg"
   name "SimpleCodexBar"
